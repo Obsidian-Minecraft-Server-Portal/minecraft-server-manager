@@ -1,3 +1,4 @@
+use log::{debug, error, info, warn};
 use serde_derive::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -149,59 +150,124 @@ fn get_file_type(extension: String) -> String {
         ("properties", "Minecraft Properties File"),
     ]);
 
-    types.get(&extension[..]).unwrap_or(&extension.as_str()).to_string()
+    types
+        .get(&extension[..])
+        .unwrap_or(&extension.as_str())
+        .to_string()
 }
 
 fn get_mime_category(path: impl AsRef<Path>) -> FileMimeCategory {
-    if !path.as_ref().exists() || path.as_ref().is_dir() {
+    let path_ref = path.as_ref();
+
+    // Debug: Check input path
+    debug!("Determining MIME category for path: {:?}", path_ref);
+
+    // Check existence and if it's a directory
+    if !path_ref.exists() {
+        warn!("Path does not exist: {:?}", path_ref);
+        return FileMimeCategory::UNKNOWN;
+    } else if path_ref.is_dir() {
+        info!("Path is a directory, not a file: {:?}", path_ref);
         return FileMimeCategory::UNKNOWN;
     }
 
     let mime = mime_guess::from_path(&path).first();
+
     if let Some(mime) = mime {
-        let mime = mime.type_().as_str();
-        match mime {
+        let mime_type = mime.type_().as_str();
+        debug!(
+            "MIME type identified: {:?} for path: {:?}",
+            mime_type, path_ref
+        );
+
+        match mime_type {
             "text" => FileMimeCategory::TEXT,
             "image" => FileMimeCategory::IMAGE,
             "audio" => FileMimeCategory::AUDIO,
             "video" => FileMimeCategory::VIDEO,
             "application" => FileMimeCategory::ARCHIVE,
-            _ => FileMimeCategory::UNKNOWN,
+            _ => {
+                warn!(
+                    "Unknown MIME type: {:?} for path: {:?}",
+                    mime_type, path_ref
+                );
+                FileMimeCategory::UNKNOWN
+            }
         }
     } else {
+        warn!("No MIME type could be identified for path: {:?}", path_ref);
+
         if is_text_file(path) {
-            return FileMimeCategory::TEXT;
+            info!(
+                "Path: {:?} identified as a text file based on content analysis.",
+                path_ref
+            );
+            FileMimeCategory::TEXT
+        } else {
+            warn!(
+                "Content analysis indicates unknown MIME category for path: {:?}",
+                path_ref
+            );
+            FileMimeCategory::UNKNOWN
         }
-        FileMimeCategory::UNKNOWN
     }
 }
 
 fn is_text_file(file_path: impl AsRef<Path>) -> bool {
-    const BUFFER_SIZE: usize = 1024;
     let path = file_path.as_ref();
+    const BUFFER_SIZE: usize = 1024;
 
-    if let Ok(mut file) = File::open(path) {
-        let mut buffer = [0; BUFFER_SIZE];
+    debug!("Checking if path is a text file: {:?}", path);
 
-        if let Ok(bytes_read) = file.read(&mut buffer) {
-            for &byte in &buffer[..bytes_read] {
-                if byte != 0x09 && byte != 0x0A && byte != 0x0D && !(0x20..=0x7E).contains(&byte) {
-                    return false;
+    match File::open(path) {
+        Ok(mut file) => {
+            let mut buffer = [0; BUFFER_SIZE];
+            match file.read(&mut buffer) {
+                Ok(bytes_read) => {
+                    debug!("Read {} bytes from file: {:?}", bytes_read, path);
+                    for &byte in &buffer[..bytes_read] {
+                        if !(byte == 0x09
+                            || byte == 0x0A
+                            || byte == 0x0D
+                            || (0x20..=0x7E).contains(&byte))
+                        {
+                            debug!(
+                                "Non-text byte identified in file: {:?}. It is not a text file.",
+                                path
+                            );
+                            return false;
+                        }
+                    }
+                    debug!("File appears to be a text file: {:?}", path);
+                    true
+                }
+                Err(err) => {
+                    error!("Failed to read file: {:?}. Error: {:?}", path, err);
+                    false
                 }
             }
-            return true;
+        }
+        Err(err) => {
+            error!("Failed to open file: {:?}. Error: {:?}", path, err);
+            false
         }
     }
-
-    false
 }
 
 fn get_mime(path: impl AsRef<Path>) -> Option<String> {
-    mime_guess::from_path(path).first().map(|m| m.to_string())
+    let path_ref = path.as_ref();
+    debug!("Getting MIME type for path: {:?}", path_ref);
+
+    mime_guess::from_path(path).first().map(|m| {
+        let mime = m.to_string();
+        debug!("MIME type for path {:?}: {:?}", path_ref, mime);
+        mime
+    })
 }
 
 impl Default for FileSystemEntry {
     fn default() -> Self {
+        info!("Creating default FileSystemEntry.");
         Self {
             name: "".to_string(),
             path: Default::default(),
@@ -218,6 +284,7 @@ impl Default for FileSystemEntry {
 
 impl Default for FileSystemEntries {
     fn default() -> Self {
+        info!("Creating default FileSystemEntries.");
         Self {
             parent: None,
             entries: Vec::new(),
@@ -227,45 +294,72 @@ impl Default for FileSystemEntries {
 
 impl From<PathBuf> for FileSystemEntry {
     fn from(value: PathBuf) -> Self {
-        if let Ok(metadata) = value.metadata() {
-            return Self {
-                name: value
-                    .file_name()
-                    .unwrap_or(OsStr::new(""))
-                    .to_string_lossy()
-                    .to_string(),
-                path: value.clone(),
-                is_dir: metadata.is_dir(),
-                size: metadata.len(),
-                r#type: get_file_type(
-                    value
-                        .extension()
+        debug!(
+            "Converting PathBuf to FileSystemEntry for path: {:?}",
+            value
+        );
+        match value.metadata() {
+            Ok(metadata) => {
+                debug!("Metadata retrieved for path: {:?}", value);
+
+                Self {
+                    name: value
+                        .file_name()
                         .unwrap_or(OsStr::new(""))
                         .to_string_lossy()
                         .to_string(),
-                ),
-                mime: get_mime(&value),
-                category: get_mime_category(&value),
-                created: metadata.created().unwrap_or(SystemTime::UNIX_EPOCH),
-                last_modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
-            };
+
+                    path: value.clone(),
+                    is_dir: metadata.is_dir(),
+                    size: metadata.len(),
+                    r#type: get_file_type(
+                        value
+                            .extension()
+                            .unwrap_or(OsStr::new(""))
+                            .to_string_lossy()
+                            .to_string(),
+                    ),
+                    mime: get_mime(&value),
+                    category: get_mime_category(&value),
+                    created: metadata.created().unwrap_or(SystemTime::UNIX_EPOCH),
+                    last_modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+                }
+            }
+            Err(err) => {
+                error!(
+                    "Failed to retrieve metadata for path: {:?}. Error: {:?}",
+                    value, err
+                );
+                Self::default()
+            }
         }
-        Self::default()
     }
 }
 
 impl From<PathBuf> for FileSystemEntries {
     fn from(value: PathBuf) -> Self {
-        if let Ok(directory_entries) = fs::read_dir(&value) {
-            let mut entries: Vec<FileSystemEntry> = Vec::new();
-            for entry in directory_entries.flatten() {
-                entries.push(entry.path().into());
+        debug!(
+            "Converting PathBuf to FileSystemEntries for directory: {:?}",
+            value
+        );
+        match fs::read_dir(&value) {
+            Ok(directory_entries) => {
+                let mut entries: Vec<FileSystemEntry> = Vec::new();
+                for entry in directory_entries.flatten() {
+                    debug!("Processing directory entry: {:?}", entry.path());
+                    entries.push(entry.path().into());
+                }
+                info!("Directory processed successfully: {:?}", value);
+
+                Self {
+                    parent: value.parent().map(|p| p.to_path_buf()),
+                    entries,
+                }
             }
-            return Self {
-                parent: value.parent().map(|p| p.to_path_buf()),
-                entries,
-            };
+            Err(err) => {
+                error!("Failed to read directory: {:?}. Error: {:?}", value, err);
+                Self::default()
+            }
         }
-        Self::default()
     }
 }
