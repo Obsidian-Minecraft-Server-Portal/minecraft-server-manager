@@ -7,16 +7,13 @@ edition = "2021"
 
 [dependencies]
 serde = "1.0.210"
-serde_json = "1.0.128"
 serde_derive = "1.0.210"
 log = "0.4.22"
 obsidian-cryptography = { git = "https://github.com/Obsidian-Minecraft-Server-Portal/cryptography.git" }
 obsidian-sqlite = { git = "https://github.com/Obsidian-Minecraft-Server-Portal/sqlite.git" }
 sqlite = "0.36.1"
 lazy_static = "1.5.0"
-tokio = { version = "1.40.0", features = ["full"] }
 mime_guess = "2.0.5"
 notify = { version = "7.0.0" }
 shell-words = { version = "1.1.0" }
 walkdir = {version = "2.5.0"}
-lzma_tarball = {version = "0.1.0", features = ["compression", "decompression", "log"]}
